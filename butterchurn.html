@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Milkshake -- Butterchurn Milkdrop Visualizer</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<!-- Butterchurn: modern, maintained JS port of MilkDrop. -->
+<!-- https://github.com/jberg/butterchurn -->
+<script src="https://unpkg.com/butterchurn@2.6.7/lib/butterchurn.min.js"></script>
+<script src="https://unpkg.com/butterchurn-presets@2.4.7/lib/butterchurnPresets.min.js"></script>
+
+<style>
+  html, body {
+    margin: 0; padding: 0; border: 0;
+    width: 100%; height: 100%;
+    overflow: hidden; background: #000; color: #eee;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  #canvas {
+    position: absolute; top: 0; left: 0;
+    width: 100vw; height: 100vh; display: block;
+    background: #000;
+  }
+
+  /* Splash / picker */
+  #picker {
+    position: absolute; inset: 0;
+    z-index: 10;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: radial-gradient(circle at center, #1a1a2e 0%, #000 80%);
+    transition: opacity 400ms ease;
+  }
+  #picker.dragover {
+    background: radial-gradient(circle at center, #2a2a5e 0%, #101030 80%);
+    box-shadow: inset 0 0 120px rgba(120, 180, 255, 0.25);
+  }
+  #picker h1 {
+    font-size: 56px; margin: 0 0 6px; letter-spacing: 2px;
+    background: linear-gradient(90deg, #ff77aa, #77ddff, #aaff77);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  #picker .sub { color: #aaa; margin: 4px 0; }
+  #picker .hint { font-size: 13px; color: #666; margin-top: 20px; max-width: 520px; text-align: center; line-height: 1.5; }
+  #picker label.btn {
+    display: inline-block; margin-top: 24px;
+    padding: 14px 28px; background: #fff; color: #111;
+    border-radius: 999px; font-weight: 600; cursor: pointer;
+    transition: transform 120ms ease, background 120ms ease;
+  }
+  #picker label.btn:hover { transform: translateY(-2px); background: #f5f5ff; }
+  #picker input[type=file] { display: none; }
+  #picker .or { color: #555; margin: 12px 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: 3px; }
+  #picker .sample-link { color: #88c; cursor: pointer; text-decoration: underline; font-size: 13px; }
+  #picker .sample-link:hover { color: #aac; }
+  #picker .credits { position: absolute; bottom: 16px; font-size: 11px; color: #555; }
+  #picker .credits a { color: #778; }
+  .hidden { opacity: 0; pointer-events: none; }
+
+  /* HUD overlays once playing */
+  #hud {
+    position: absolute; inset: 0;
+    pointer-events: none;
+    z-index: 5;
+  }
+  #nowplaying, #preset-name, #controls {
+    position: absolute;
+    padding: 6px 12px;
+    background: rgba(0,0,0,0.55);
+    border-radius: 4px;
+    font-size: 12px;
+    color: #ddd;
+    pointer-events: auto;
+    backdrop-filter: blur(4px);
+    opacity: 0;
+    transition: opacity 200ms ease;
+  }
+  #hud.show #nowplaying,
+  #hud.show #preset-name,
+  #hud.show #controls { opacity: 1; }
+  #hud.idle #nowplaying,
+  #hud.idle #preset-name,
+  #hud.idle #controls { opacity: 0; }
+
+  #nowplaying { bottom: 12px; left: 12px; }
+  #preset-name { top: 12px; left: 12px; max-width: 60vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #controls { top: 12px; right: 12px; display: flex; gap: 6px; align-items: center; }
+  #controls button {
+    background: rgba(255,255,255,0.08);
+    color: #ddd; border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 3px; padding: 4px 10px; cursor: pointer; font: inherit;
+    transition: background 100ms;
+  }
+  #controls button:hover { background: rgba(255,255,255,0.18); }
+  #controls .on { background: rgba(120,200,120,0.2); border-color: rgba(120,200,120,0.5); }
+  #toast {
+    position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    padding: 18px 30px;
+    background: rgba(0,0,0,0.65);
+    border-radius: 6px;
+    font-size: 24px;
+    color: #fff;
+    opacity: 0;
+    transition: opacity 300ms ease;
+    pointer-events: none;
+    z-index: 6;
+    backdrop-filter: blur(6px);
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<canvas id="canvas">
+  Sorry, you need a browser that supports WebGL.
+</canvas>
+
+<div id="picker">
+  <h1>MILKSHAKE</h1>
+  <p class="sub">Powered by <a href="https://github.com/jberg/butterchurn" style="color:#88c">Butterchurn</a> -- MilkDrop in your browser.</p>
+
+  <label class="btn" for="fileInput">Choose audio file...</label>
+  <input id="fileInput" type="file" accept="audio/*,.mp3,.ogg,.wav,.flac,.m4a,.aac,.opus">
+
+  <div class="or">or drop a file anywhere</div>
+  <div><span class="sample-link" id="useSample">Use the bundled sample (song.ogg)</span></div>
+
+  <p class="hint">
+    Once playing: <b>&larr;/&rarr;</b> change preset,
+    <b>Space</b> toggle auto-cycle,
+    <b>R</b> random preset,
+    <b>F</b> fullscreen,
+    <b>H</b> hide/show HUD.
+  </p>
+
+  <div class="credits">
+    Butterchurn presets include "Cream of the Crop," Geiss, Flexi, Martin, and many more classics.
+  </div>
+</div>
+
+<div id="hud" class="show">
+  <div id="preset-name">&nbsp;</div>
+  <div id="nowplaying">&nbsp;</div>
+  <div id="controls">
+    <button id="btnPrev" title="Previous preset (&larr;)">&larr;</button>
+    <button id="btnNext" title="Next preset (&rarr;)">&rarr;</button>
+    <button id="btnRandom" title="Random preset (R)">shuffle</button>
+    <button id="btnAuto" title="Toggle auto-cycle (Space)">auto</button>
+    <button id="btnFullscreen" title="Fullscreen (F)">full</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<audio id="audio" preload="auto" crossorigin="anonymous"></audio>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---- UI refs ----
+  var canvas    = document.getElementById('canvas');
+  var picker    = document.getElementById('picker');
+  var fileInput = document.getElementById('fileInput');
+  var sampleLnk = document.getElementById('useSample');
+  var audioEl   = document.getElementById('audio');
+  var hud       = document.getElementById('hud');
+  var npEl      = document.getElementById('nowplaying');
+  var nameEl    = document.getElementById('preset-name');
+  var toastEl   = document.getElementById('toast');
+
+  var btnPrev       = document.getElementById('btnPrev');
+  var btnNext       = document.getElementById('btnNext');
+  var btnRandom     = document.getElementById('btnRandom');
+  var btnAuto       = document.getElementById('btnAuto');
+  var btnFullscreen = document.getElementById('btnFullscreen');
+
+  // ---- State ----
+  var visualizer = null;
+  var audioCtx   = null;
+  var source     = null;
+  var presets    = {};           // { name: preset }
+  var presetList = [];           // [ [name, preset], ... ]
+  var presetIdx  = 0;
+  var autoCycle  = true;
+  var autoCycleMs = 15000;
+  var autoTimer  = null;
+  var started    = false;
+  var hudTimer   = null;
+
+  // ---- Butterchurn sanity ----
+  if (typeof butterchurn === 'undefined' || typeof butterchurnPresets === 'undefined') {
+    showToast('Butterchurn CDN failed to load -- check your internet connection.', 8000);
+    picker.querySelector('.hint').style.color = '#f88';
+  }
+
+  // ---- Helpers ----
+  function showToast(msg, ms) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(function () { toastEl.classList.remove('show'); }, ms || 1600);
+  }
+
+  function pickRandom() {
+    if (!presetList.length) return;
+    presetIdx = Math.floor(Math.random() * presetList.length);
+    loadCurrent(true);
+  }
+
+  function loadCurrent(announce) {
+    if (!visualizer || !presetList.length) return;
+    var entry = presetList[presetIdx];
+    var name  = entry[0];
+    var p     = entry[1];
+    try {
+      visualizer.loadPreset(p, 2.7 /* blend seconds */);
+      nameEl.textContent = (presetIdx + 1) + '/' + presetList.length + ' -- ' + name;
+      if (announce) showToast(name);
+    } catch (e) {
+      console.warn('[preset] failed to load', name, e);
+    }
+  }
+
+  function advance(delta) {
+    if (!presetList.length) return;
+    presetIdx = (presetIdx + delta + presetList.length) % presetList.length;
+    loadCurrent(true);
+    resetAuto();
+  }
+
+  function setAuto(on) {
+    autoCycle = on;
+    btnAuto.classList.toggle('on', autoCycle);
+    resetAuto();
+    showToast('Auto-cycle ' + (on ? 'on' : 'off'));
+  }
+  function resetAuto() {
+    if (autoTimer) clearInterval(autoTimer);
+    if (autoCycle) {
+      autoTimer = setInterval(function () { advance(+1); }, autoCycleMs);
+    }
+  }
+
+  function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen && document.documentElement.requestFullscreen();
+    } else {
+      document.exitFullscreen && document.exitFullscreen();
+    }
+  }
+
+  function wakeHud() {
+    hud.classList.remove('idle');
+    hud.classList.add('show');
+    clearTimeout(hudTimer);
+    hudTimer = setTimeout(function () { hud.classList.add('idle'); }, 3000);
+  }
+
+  // ---- Audio + Butterchurn bootstrap ----
+  function start(url, label) {
+    if (started) return;
+    started = true;
+
+    picker.classList.add('hidden');
+    setTimeout(function () { picker.style.display = 'none'; }, 450);
+    npEl.textContent = 'Now playing: ' + label;
+
+    audioEl.src = url;
+    audioEl.loop = true;
+
+    // Create AudioContext only after user gesture.
+    var AC = window.AudioContext || window.webkitAudioContext;
+    audioCtx = new AC();
+    source = audioCtx.createMediaElementSource(audioEl);
+    // We need audio to reach the user's speakers too:
+    source.connect(audioCtx.destination);
+
+    // Size the canvas for pixel density.
+    sizeCanvas();
+
+    // Create Butterchurn visualizer.
+    visualizer = butterchurn.default.createVisualizer(audioCtx, canvas, {
+      width: canvas.width,
+      height: canvas.height,
+      pixelRatio: window.devicePixelRatio || 1,
+      textureRatio: 1
+    });
+    visualizer.connectAudio(source);
+
+    // Load the built-in presets (~55 curated ones).
+    presets = (butterchurnPresets.default && butterchurnPresets.default.getPresets)
+              ? butterchurnPresets.default.getPresets()
+              : butterchurnPresets.getPresets();
+    var keys = Object.keys(presets).sort();
+    presetList = keys.map(function (k) { return [k, presets[k]]; });
+
+    // Start at a random preset so opening the app twice doesn't look identical.
+    presetIdx = Math.floor(Math.random() * presetList.length);
+    loadCurrent(true);
+    setAuto(true);
+
+    // Play!
+    audioEl.play().catch(function (err) {
+      console.warn('[audio] autoplay blocked:', err && err.message);
+      showToast('Click anywhere to start audio');
+    });
+
+    // Render loop.
+    function render() {
+      visualizer.render();
+      requestAnimationFrame(render);
+    }
+    requestAnimationFrame(render);
+
+    // Keep HUD visible briefly on any interaction, then fade.
+    wakeHud();
+  }
+
+  function sizeCanvas() {
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width  = Math.floor(window.innerWidth  * dpr);
+    canvas.height = Math.floor(window.innerHeight * dpr);
+    canvas.style.width  = window.innerWidth  + 'px';
+    canvas.style.height = window.innerHeight + 'px';
+    if (visualizer) {
+      visualizer.setRendererSize(canvas.width, canvas.height);
+    }
+  }
+
+  // ---- Event wiring ----
+  fileInput.addEventListener('change', function (e) {
+    var f = e.target.files && e.target.files[0];
+    if (!f) return;
+    start(URL.createObjectURL(f), f.name);
+  });
+
+  sampleLnk.addEventListener('click', function () {
+    start('song.ogg', 'song.ogg (bundled sample)');
+  });
+
+  // Drag-and-drop anywhere.
+  window.addEventListener('dragover', function (e) {
+    e.preventDefault();
+    if (!started) picker.classList.add('dragover');
+  });
+  window.addEventListener('dragleave', function () {
+    picker.classList.remove('dragover');
+  });
+  window.addEventListener('drop', function (e) {
+    e.preventDefault();
+    picker.classList.remove('dragover');
+    var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (!f) return;
+    // If already playing, swap the source.
+    if (started) {
+      audioEl.src = URL.createObjectURL(f);
+      audioEl.play();
+      npEl.textContent = 'Now playing: ' + f.name;
+      wakeHud();
+    } else {
+      start(URL.createObjectURL(f), f.name);
+    }
+  });
+
+  // Keyboard shortcuts.
+  window.addEventListener('keydown', function (e) {
+    if (!started) return;
+    switch (e.key) {
+      case 'ArrowRight':
+      case 'n': case 'N':
+        advance(+1); wakeHud(); break;
+      case 'ArrowLeft':
+      case 'p': case 'P':
+        advance(-1); wakeHud(); break;
+      case 'r': case 'R':
+        pickRandom(); resetAuto(); wakeHud(); break;
+      case ' ':
+        e.preventDefault();
+        setAuto(!autoCycle); wakeHud(); break;
+      case 'f': case 'F':
+        toggleFullscreen(); break;
+      case 'h': case 'H':
+        hud.classList.toggle('show');
+        hud.classList.toggle('idle');
+        break;
+    }
+  });
+
+  btnPrev.addEventListener('click', function () { advance(-1); wakeHud(); });
+  btnNext.addEventListener('click', function () { advance(+1); wakeHud(); });
+  btnRandom.addEventListener('click', function () { pickRandom(); resetAuto(); wakeHud(); });
+  btnAuto.addEventListener('click', function () { setAuto(!autoCycle); wakeHud(); });
+  btnFullscreen.addEventListener('click', toggleFullscreen);
+
+  // Keep HUD visible on mouse activity, then idle out.
+  window.addEventListener('mousemove', wakeHud);
+
+  window.addEventListener('resize', sizeCanvas);
+})();
+</script>
+
+</body>
+</html>

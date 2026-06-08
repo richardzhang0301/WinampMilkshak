@@ -1,0 +1,14 @@
+{
+  "name": "milkshake",
+  "version": "0.1.3",
+  "description": "Milkshake: Winamp MilkDrop-style WebGL visualizations (cloned from cggaurav/milkshake).",
+  "private": true,
+  "scripts": {
+    "start": "node server/server.js",
+    "serve": "node server/server.js"
+  },
+  "engines": {
+    "node": ">=14"
+  },
+  "license": "LGPL-2.1-or-later"
+}

@@ -1,0 +1,158 @@
+<!--
+  milkshake -- WebGL Milkdrop-esque visualisation (port of projectM)
+  Copyright (C)2011 Matt Gattis and contributors
+  LGPL-2.1-or-later. See LICENSE.
+
+  Local-file fork: drop any MP3/OGG/WAV/FLAC/M4A onto the page (or pick one
+  via the dialog) and the Milkdrop visualizer will render it.
+-->
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Milkshake -- WebGL Milkdrop Visualizer</title>
+  <script type="text/javascript" src="milkshake.js"></script>
+  <style>
+    html, body {
+      margin: 0; padding: 0; border: 0;
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #000;
+      color: #eee;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    #canvas {
+      position: absolute; top: 0; left: 0;
+      z-index: 0; border: none;
+      width: 100vw; height: 100vh;
+    }
+    #picker {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at center, #1a1a2e 0%, #000 80%);
+      transition: opacity 400ms ease;
+    }
+    #picker.dragover {
+      background: radial-gradient(circle at center, #2a2a5e 0%, #101030 80%);
+      box-shadow: inset 0 0 120px rgba(120, 180, 255, 0.25);
+    }
+    #picker h1 {
+      font-size: 48px; margin: 0 0 8px; letter-spacing: 2px;
+      background: linear-gradient(90deg, #ff77aa, #77ddff, #aaff77);
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+    #picker p { margin: 4px 0; color: #aaa; }
+    #picker .hint { font-size: 13px; color: #666; margin-top: 20px; }
+    #picker label.btn {
+      display: inline-block;
+      margin-top: 24px;
+      padding: 14px 28px;
+      background: #fff;
+      color: #111;
+      border-radius: 999px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 120ms ease, background 120ms ease;
+    }
+    #picker label.btn:hover { transform: translateY(-2px); background: #f5f5ff; }
+    #picker input[type=file] { display: none; }
+    #picker .or { color: #555; margin: 12px 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: 3px; }
+    #picker .sample-link { color: #88c; cursor: pointer; text-decoration: underline; font-size: 13px; }
+    #picker .sample-link:hover { color: #aac; }
+    #nowplaying {
+      position: absolute;
+      bottom: 12px; left: 12px;
+      z-index: 5;
+      padding: 6px 10px;
+      background: rgba(0,0,0,0.5);
+      border-radius: 4px;
+      font-size: 12px;
+      color: #ccc;
+      display: none;
+    }
+    #nowplaying.show { display: block; }
+    .hidden { opacity: 0; pointer-events: none; }
+  </style>
+</head>
+<body>
+
+  <canvas id="canvas">
+    Sorry, you need a more updated browser to see this, because it uses WebGL.
+    Try the latest <a href="https://www.google.com/chrome">Google Chrome</a>
+    or <a href="https://www.mozilla.org/firefox">Firefox</a>.
+  </canvas>
+
+  <div id="picker">
+    <h1>MILKSHAKE</h1>
+    <p>WebGL Milkdrop visualizer -- point it at any song on your computer.</p>
+
+    <label class="btn" for="fileInput">Choose audio file...</label>
+    <input id="fileInput" type="file" accept="audio/*,.mp3,.ogg,.wav,.flac,.m4a,.aac,.opus">
+
+    <div class="or">or drop a file anywhere</div>
+    <div><span class="sample-link" id="useSample">Use the bundled sample (song.ogg)</span></div>
+
+    <p class="hint">Supported: MP3, OGG, WAV, FLAC, M4A, AAC, Opus (whatever your browser can decode)</p>
+  </div>
+
+  <div id="nowplaying"></div>
+
+  <script>
+    (function () {
+      var picker    = document.getElementById('picker');
+      var fileInput = document.getElementById('fileInput');
+      var sample    = document.getElementById('useSample');
+      var np        = document.getElementById('nowplaying');
+      var started   = false;
+
+      function start(url, label) {
+        if (started) return;
+        started = true;
+        picker.classList.add('hidden');
+        setTimeout(function () { picker.style.display = 'none'; }, 500);
+        np.textContent = 'Now playing: ' + label;
+        np.classList.add('show');
+        milk.shake('canvas', url);
+      }
+
+      fileInput.addEventListener('change', function (e) {
+        var f = e.target.files && e.target.files[0];
+        if (!f) return;
+        start(URL.createObjectURL(f), f.name);
+      });
+
+      sample.addEventListener('click', function () {
+        start('song.ogg', 'song.ogg (bundled sample)');
+      });
+
+      window.addEventListener('dragover', function (e) {
+        e.preventDefault();
+        picker.classList.add('dragover');
+      });
+      window.addEventListener('dragleave', function (e) {
+        if (e.target === document.documentElement || e.target === picker) {
+          picker.classList.remove('dragover');
+        }
+      });
+      window.addEventListener('drop', function (e) {
+        e.preventDefault();
+        picker.classList.remove('dragover');
+        var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+        if (!f) return;
+        start(URL.createObjectURL(f), f.name);
+      });
+
+      window.addEventListener('resize', function () {
+        var c = document.getElementById('canvas');
+        if (c) { c.width = window.innerWidth; c.height = window.innerHeight; }
+      });
+    })();
+  </script>
+
+</body>
+</html>
