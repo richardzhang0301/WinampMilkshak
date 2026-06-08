@@ -109,6 +109,90 @@
     backdrop-filter: blur(6px);
   }
   #toast.show { opacity: 1; }
+
+  /* Recording UI */
+  #controls .rec-on {
+    background: rgba(255,80,80,0.3);
+    border-color: rgba(255,80,80,0.6);
+    color: #fff;
+  }
+  #rec-panel {
+    position: absolute; top: 50px; right: 12px;
+    width: 240px;
+    padding: 14px 16px;
+    background: rgba(15,15,22,0.92);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 6px;
+    pointer-events: auto;
+    z-index: 7;
+    font-size: 12px;
+    color: #ddd;
+    display: none;
+    backdrop-filter: blur(8px);
+  }
+  #rec-panel.show { display: block; }
+  #rec-panel h3 {
+    margin: 0 0 10px; font-size: 13px; color: #fff;
+    font-weight: 600; letter-spacing: 1px; text-transform: uppercase;
+  }
+  #rec-panel label {
+    display: block; margin: 10px 0 3px; color: #aaa;
+    font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+  }
+  #rec-panel input[type=number], #rec-panel select {
+    width: 100%; box-sizing: border-box;
+    background: rgba(255,255,255,0.06);
+    color: #eee;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 3px;
+    padding: 5px 8px;
+    font: inherit;
+  }
+  #rec-panel .row { display: flex; gap: 8px; margin-top: 14px; }
+  #rec-panel .row button {
+    flex: 1;
+    background: rgba(255,255,255,0.1);
+    color: #ddd;
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 3px;
+    padding: 7px 10px;
+    cursor: pointer;
+    font: inherit;
+  }
+  #rec-panel .row button.primary {
+    background: rgba(120,200,120,0.25);
+    border-color: rgba(120,200,120,0.6);
+    color: #efe;
+  }
+  #rec-panel .note {
+    color: #888; font-size: 11px; margin-top: 12px; line-height: 1.4;
+  }
+  #rec-indicator {
+    position: absolute; top: 12px; left: 50%;
+    transform: translateX(-50%);
+    padding: 5px 14px;
+    background: rgba(180,30,30,0.85);
+    border-radius: 3px;
+    font-size: 12px;
+    color: #fff;
+    opacity: 0;
+    transition: opacity 200ms ease;
+    pointer-events: none;
+    z-index: 6;
+    font-variant-numeric: tabular-nums;
+  }
+  #rec-indicator.show { opacity: 1; }
+  #rec-indicator::before {
+    content: '';
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #fff;
+    margin-right: 8px;
+    vertical-align: middle;
+    animation: blink 1.2s linear infinite;
+  }
+  @keyframes blink { 0%,49%{opacity:1} 50%,100%{opacity:0.2} }
 </style>
 </head>
 <body>
@@ -132,7 +216,8 @@
     <b>Space</b> toggle auto-cycle,
     <b>R</b> random preset,
     <b>F</b> fullscreen,
-    <b>H</b> hide/show HUD.
+    <b>H</b> hide/show HUD,
+    <b>V</b> record video.
   </p>
 
   <div class="credits">
@@ -148,11 +233,38 @@
     <button id="btnNext" title="Next preset (&rarr;)">&rarr;</button>
     <button id="btnRandom" title="Random preset (R)">shuffle</button>
     <button id="btnAuto" title="Toggle auto-cycle (Space)">auto</button>
+    <button id="btnRec" title="Record video (V)">rec</button>
     <button id="btnFullscreen" title="Fullscreen (F)">full</button>
   </div>
 </div>
 
 <div id="toast"></div>
+
+<div id="rec-indicator">REC 0:00</div>
+
+<div id="rec-panel">
+  <h3>Record video</h3>
+
+  <label for="recVideoBitrate">Video bitrate (Mbps)</label>
+  <input id="recVideoBitrate" type="number" min="0.5" max="80" step="0.5" value="8">
+
+  <label for="recAudioBitrate">Audio bitrate (kbps)</label>
+  <input id="recAudioBitrate" type="number" min="32" max="320" step="16" value="192">
+
+  <label for="recFps">Frame rate (fps)</label>
+  <select id="recFps">
+    <option value="24">24</option>
+    <option value="30">30</option>
+    <option value="60" selected>60</option>
+  </select>
+
+  <div class="row">
+    <button id="btnRecStart" class="primary">Start</button>
+    <button id="btnRecCancel">Cancel</button>
+  </div>
+
+  <div class="note" id="recNote">Records in real-time. Saves as .webm.</div>
+</div>
 
 <audio id="audio" preload="auto" crossorigin="anonymous"></audio>
 
@@ -175,7 +287,17 @@
   var btnNext       = document.getElementById('btnNext');
   var btnRandom     = document.getElementById('btnRandom');
   var btnAuto       = document.getElementById('btnAuto');
+  var btnRec        = document.getElementById('btnRec');
   var btnFullscreen = document.getElementById('btnFullscreen');
+
+  var recPanelEl    = document.getElementById('rec-panel');
+  var recIndEl      = document.getElementById('rec-indicator');
+  var recNoteEl     = document.getElementById('recNote');
+  var recVbInput    = document.getElementById('recVideoBitrate');
+  var recAbInput    = document.getElementById('recAudioBitrate');
+  var recFpsSelect  = document.getElementById('recFps');
+  var btnRecStart   = document.getElementById('btnRecStart');
+  var btnRecCancel  = document.getElementById('btnRecCancel');
 
   // ---- State ----
   var visualizer = null;
@@ -189,6 +311,15 @@
   var autoTimer  = null;
   var started    = false;
   var hudTimer   = null;
+
+  // ---- Recording state ----
+  var recorder      = null;
+  var recChunks     = [];
+  var recAudioDest  = null;
+  var recStream     = null;
+  var recMimeType   = '';
+  var recStartTime  = 0;
+  var recIndTimer   = null;
 
   // ---- Butterchurn sanity ----
   if (typeof butterchurn === 'undefined' || typeof butterchurnPresets === 'undefined') {
@@ -330,6 +461,148 @@
     }
   }
 
+  // ---- Recording ----
+  function pickMimeType() {
+    if (typeof MediaRecorder === 'undefined') return '';
+    var candidates = [
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm;codecs=h264,opus',
+      'video/webm',
+      'video/mp4;codecs=avc1,mp4a.40.2',
+      'video/mp4'
+    ];
+    for (var i = 0; i < candidates.length; i++) {
+      if (MediaRecorder.isTypeSupported(candidates[i])) return candidates[i];
+    }
+    return '';
+  }
+
+  function fmtElapsed(ms) {
+    var s  = Math.floor(ms / 1000);
+    var mm = Math.floor(s / 60);
+    var ss = s % 60;
+    return mm + ':' + (ss < 10 ? '0' : '') + ss;
+  }
+
+  function updateRecIndicator() {
+    if (!recorder || recorder.state !== 'recording') return;
+    recIndEl.textContent = 'REC ' + fmtElapsed(Date.now() - recStartTime);
+  }
+
+  function showRecPanel() {
+    if (!started) { showToast('Start audio first.'); return; }
+    if (typeof MediaRecorder === 'undefined') {
+      recNoteEl.textContent = 'MediaRecorder not supported in this browser.';
+      recNoteEl.style.color = '#f88';
+    } else {
+      var mt = pickMimeType();
+      if (mt) {
+        var ext = mt.indexOf('mp4') >= 0 ? '.mp4' : '.webm';
+        recNoteEl.textContent = 'Records in real-time. Saves ' + ext + ' (' + mt.split(';')[0] + ').';
+        recNoteEl.style.color = '';
+      } else {
+        recNoteEl.textContent = 'No supported video format -- recording disabled.';
+        recNoteEl.style.color = '#f88';
+      }
+    }
+    recPanelEl.classList.add('show');
+  }
+
+  function hideRecPanel() {
+    recPanelEl.classList.remove('show');
+  }
+
+  function startRecording() {
+    if (!started) { showToast('Start audio first.'); return; }
+    if (recorder && recorder.state === 'recording') return;
+
+    var vBps = Math.max(0.5, parseFloat(recVbInput.value || '8'))    * 1e6;
+    var aBps = Math.max(32,  parseInt(recAbInput.value  || '192', 10)) * 1e3;
+    var fps  = parseInt(recFpsSelect.value || '60', 10) || 60;
+
+    recMimeType = pickMimeType();
+    if (!recMimeType) {
+      showToast('Recording not supported in this browser.', 4000);
+      return;
+    }
+
+    try {
+      if (!recAudioDest) {
+        recAudioDest = audioCtx.createMediaStreamDestination();
+        source.connect(recAudioDest);
+      }
+
+      var videoStream = canvas.captureStream(fps);
+      recStream = new MediaStream();
+      videoStream.getVideoTracks().forEach(function (t) { recStream.addTrack(t); });
+      recAudioDest.stream.getAudioTracks().forEach(function (t) { recStream.addTrack(t); });
+
+      recChunks = [];
+      recorder = new MediaRecorder(recStream, {
+        mimeType:           recMimeType,
+        videoBitsPerSecond: vBps,
+        audioBitsPerSecond: aBps
+      });
+      recorder.ondataavailable = function (e) {
+        if (e.data && e.data.size) recChunks.push(e.data);
+      };
+      recorder.onerror = function (e) {
+        console.error('[record] error', e);
+        showToast('Recording error: ' + ((e.error && e.error.name) || 'unknown'), 4000);
+      };
+      recorder.onstop = function () {
+        var blob = new Blob(recChunks, { type: recMimeType });
+        var ext  = recMimeType.indexOf('mp4') >= 0 ? 'mp4' : 'webm';
+        var url  = URL.createObjectURL(blob);
+        var a    = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = 'milkshake-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.' + ext;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function () {
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }, 1500);
+        recChunks = [];
+        recStream = null;
+        showToast('Saved ' + a.download + ' (' + (blob.size / (1024*1024)).toFixed(1) + ' MB)', 3500);
+      };
+      recorder.start(1000); // 1s chunks -> robust against tab freezes
+
+      recStartTime = Date.now();
+      hideRecPanel();
+      btnRec.classList.add('rec-on');
+      recIndEl.classList.add('show');
+      updateRecIndicator();
+      if (recIndTimer) clearInterval(recIndTimer);
+      recIndTimer = setInterval(updateRecIndicator, 1000);
+      showToast('Recording -- press V or click rec to stop.', 2500);
+    } catch (e) {
+      console.error('[record] start failed', e);
+      showToast('Recording failed: ' + e.message, 4000);
+    }
+  }
+
+  function stopRecording() {
+    if (!recorder || recorder.state !== 'recording') return;
+    try { recorder.stop(); } catch (e) {}
+    btnRec.classList.remove('rec-on');
+    recIndEl.classList.remove('show');
+    if (recIndTimer) { clearInterval(recIndTimer); recIndTimer = null; }
+  }
+
+  function toggleRecording() {
+    if (recorder && recorder.state === 'recording') {
+      stopRecording();
+    } else if (recPanelEl.classList.contains('show')) {
+      hideRecPanel();
+    } else {
+      showRecPanel();
+    }
+  }
+
   // ---- Event wiring ----
   fileInput.addEventListener('change', function (e) {
     var f = e.target.files && e.target.files[0];
@@ -386,6 +659,8 @@
         hud.classList.toggle('show');
         hud.classList.toggle('idle');
         break;
+      case 'v': case 'V':
+        toggleRecording(); wakeHud(); break;
     }
   });
 
@@ -393,6 +668,9 @@
   btnNext.addEventListener('click', function () { advance(+1); wakeHud(); });
   btnRandom.addEventListener('click', function () { pickRandom(); resetAuto(); wakeHud(); });
   btnAuto.addEventListener('click', function () { setAuto(!autoCycle); wakeHud(); });
+  btnRec.addEventListener('click', function () { toggleRecording(); wakeHud(); });
+  btnRecStart.addEventListener('click', startRecording);
+  btnRecCancel.addEventListener('click', hideRecPanel);
   btnFullscreen.addEventListener('click', toggleFullscreen);
 
   // Keep HUD visible on mouse activity, then idle out.
