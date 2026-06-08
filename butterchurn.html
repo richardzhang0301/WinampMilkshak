@@ -84,7 +84,24 @@
   #hud.idle #controls { opacity: 0; }
 
   #nowplaying { bottom: 60px; left: 12px; }
-  #preset-name { top: 12px; left: 12px; max-width: 60vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #preset-name { top: 12px; left: 12px; max-width: 60vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center; gap: 4px; }
+  #preset-name #presetIdxInput {
+    width: 56px;
+    background: rgba(255,255,255,0.08);
+    color: #fff;
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 3px;
+    padding: 2px 5px;
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    -moz-appearance: textfield;
+  }
+  #preset-name #presetIdxInput::-webkit-outer-spin-button,
+  #preset-name #presetIdxInput::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  #preset-name #presetIdxInput:focus { outline: none; background: rgba(255,255,255,0.16); border-color: rgba(120,180,255,0.6); }
+  #preset-name #presetTotal { color: #999; font-variant-numeric: tabular-nums; }
+  #preset-name #presetName  { color: #ddd; overflow: hidden; text-overflow: ellipsis; }
   #controls { top: 12px; right: 12px; display: flex; gap: 6px; align-items: center; }
   #controls button {
     background: rgba(255,255,255,0.08);
@@ -293,7 +310,11 @@
 </div>
 
 <div id="hud" class="show">
-  <div id="preset-name">&nbsp;</div>
+  <div id="preset-name">
+    <input id="presetIdxInput" type="number" min="1" value="" title="Jump to preset number (Enter)">
+    <span id="presetTotal">/0</span>
+    <span id="presetName">&nbsp;</span>
+  </div>
   <div id="nowplaying">&nbsp;</div>
   <div id="controls">
     <button id="btnPrev" title="Previous preset (&larr;)">&larr;</button>
@@ -319,17 +340,26 @@
 <div id="rec-panel">
   <h3>Record video</h3>
 
-  <label for="recVideoBitrate">Video bitrate (Mbps)</label>
+  <label for="recVideoBitrate">Video bitrate (Mbps) <span style="color:#666;text-transform:none;letter-spacing:0;font-size:10px">auto from res+fps</span></label>
   <input id="recVideoBitrate" type="number" min="0.5" max="80" step="0.5" value="8">
 
   <label for="recAudioBitrate">Audio bitrate (kbps)</label>
-  <input id="recAudioBitrate" type="number" min="32" max="320" step="16" value="192">
+  <input id="recAudioBitrate" type="number" min="32" max="320" step="16" value="320">
 
   <label for="recFps">Frame rate (fps)</label>
   <select id="recFps">
     <option value="24">24</option>
     <option value="30">30</option>
     <option value="60" selected>60</option>
+  </select>
+
+  <label for="recRes">Resolution</label>
+  <select id="recRes">
+    <option value="">Window (native)</option>
+    <option value="720">720p  (HD)</option>
+    <option value="1080" selected>1080p (Full HD)</option>
+    <option value="1440">1440p (QHD)</option>
+    <option value="2160">2160p (4K UHD)</option>
   </select>
 
   <div class="row">
@@ -357,6 +387,10 @@
   var nameEl    = document.getElementById('preset-name');
   var toastEl   = document.getElementById('toast');
 
+  var presetIdxInput = document.getElementById('presetIdxInput');
+  var presetTotalEl  = document.getElementById('presetTotal');
+  var presetNameSpan = document.getElementById('presetName');
+
   var btnPrev       = document.getElementById('btnPrev');
   var btnNext       = document.getElementById('btnNext');
   var btnRandom     = document.getElementById('btnRandom');
@@ -370,6 +404,7 @@
   var recVbInput    = document.getElementById('recVideoBitrate');
   var recAbInput    = document.getElementById('recAudioBitrate');
   var recFpsSelect  = document.getElementById('recFps');
+  var recResSelect  = document.getElementById('recRes');
   var btnRecStart   = document.getElementById('btnRecStart');
   var btnRecCancel  = document.getElementById('btnRecCancel');
 
@@ -386,7 +421,7 @@
   var presets    = {};           // { name: preset }
   var presetList = [];           // [ [name, preset], ... ]
   var presetIdx  = 0;
-  var autoCycle  = true;
+  var autoCycle  = false;
   var autoCycleMs = 15000;
   var autoTimer  = null;
   var started    = false;
@@ -400,6 +435,7 @@
   var recMimeType   = '';
   var recStartTime  = 0;
   var recIndTimer   = null;
+  var recRenderSize = null;
 
   // Transport state
   var userSeeking   = false;
@@ -431,7 +467,13 @@
     var p     = entry[1];
     try {
       visualizer.loadPreset(p, 2.7 /* blend seconds */);
-      nameEl.textContent = (presetIdx + 1) + '/' + presetList.length + ' -- ' + name;
+      if (document.activeElement !== presetIdxInput) {
+        presetIdxInput.value = (presetIdx + 1);
+      }
+      presetIdxInput.max          = presetList.length;
+      presetTotalEl.textContent   = '/' + presetList.length;
+      presetNameSpan.textContent  = ' -- ' + name;
+      nameEl.title                = name;
       if (announce) showToast(name);
     } catch (e) {
       console.warn('[preset] failed to load', name, e);
@@ -441,6 +483,21 @@
   function advance(delta) {
     if (!presetList.length) return;
     presetIdx = (presetIdx + delta + presetList.length) % presetList.length;
+    loadCurrent(true);
+    resetAuto();
+  }
+
+  function jumpToPresetFromInput() {
+    if (!presetList.length) return;
+    var n = parseInt(presetIdxInput.value, 10);
+    if (!isFinite(n)) {
+      presetIdxInput.value = presetIdx + 1;
+      return;
+    }
+    n = Math.max(1, Math.min(presetList.length, n));
+    presetIdxInput.value = n;
+    if (n - 1 === presetIdx) return;       // no change
+    presetIdx = n - 1;
     loadCurrent(true);
     resetAuto();
   }
@@ -514,7 +571,8 @@
     // Start at a random preset so opening the app twice doesn't look identical.
     presetIdx = Math.floor(Math.random() * presetList.length);
     loadCurrent(true);
-    setAuto(true);
+    // Auto-cycle is OFF by default; user can toggle with Space or the auto button.
+    btnAuto.classList.toggle('on', autoCycle);
 
     // Play!
     audioEl.play().catch(function (err) {
@@ -535,16 +593,61 @@
 
   function sizeCanvas() {
     var dpr = window.devicePixelRatio || 1;
-    canvas.width  = Math.floor(window.innerWidth  * dpr);
-    canvas.height = Math.floor(window.innerHeight * dpr);
     canvas.style.width  = window.innerWidth  + 'px';
     canvas.style.height = window.innerHeight + 'px';
+    // While recording at a fixed resolution, don't touch the framebuffer.
+    if (recRenderSize) return;
+    canvas.width  = Math.floor(window.innerWidth  * dpr);
+    canvas.height = Math.floor(window.innerHeight * dpr);
     if (visualizer) {
       visualizer.setRendererSize(canvas.width, canvas.height);
     }
   }
 
   // ---- Recording ----
+  // YouTube-recommended H.264 SDR upload bitrates (Mbps).
+  // https://support.google.com/youtube/answer/1722171
+  var BITRATE_TABLE_MBPS = {
+    '720':  { 24: 5,  30: 5,  60: 7.5 },
+    '1080': { 24: 8,  30: 8,  60: 12  },
+    '1440': { 24: 16, 30: 16, 60: 24  },
+    '2160': { 24: 45, 30: 45, 60: 68  }
+  };
+
+  function bestTierForHeight(h) {
+    if (h <= 900)  return '720';
+    if (h <= 1200) return '1080';
+    if (h <= 1800) return '1440';
+    return '2160';
+  }
+
+  function recommendedVideoBitrate() {
+    var fps = parseInt(recFpsSelect.value, 10);
+    if (fps !== 24 && fps !== 30 && fps !== 60) fps = 30;
+    var resOpt = recResSelect.value;
+    if (!resOpt) resOpt = bestTierForHeight(canvas.height || 1080);
+    var row = BITRATE_TABLE_MBPS[resOpt] || BITRATE_TABLE_MBPS['1080'];
+    return row[fps] != null ? row[fps] : row[30];
+  }
+
+  function applyRecommendedBitrate() {
+    recVbInput.value = recommendedVideoBitrate();
+  }
+
+  // Compute the framebuffer size to record at, preserving window aspect.
+  // option === '' (or falsy) => use the canvas's current size (no change).
+  function computeRecSize(option) {
+    if (!option) return null;
+    var targetH = parseInt(option, 10);
+    if (!targetH) return null;
+    var aspect = canvas.width / canvas.height;
+    var w = Math.round(targetH * aspect);
+    var h = targetH;
+    if (w % 2) w++; // codecs prefer even dims
+    if (h % 2) h++;
+    return { w: w, h: h };
+  }
+
   function pickMimeType() {
     if (typeof MediaRecorder === 'undefined') return '';
     var candidates = [
@@ -616,6 +719,16 @@
         source.connect(recAudioDest);
       }
 
+      // Apply selected target resolution to the canvas framebuffer.
+      // Visible canvas (CSS width/height = window) is unchanged.
+      var size = computeRecSize(recResSelect.value);
+      if (size) {
+        canvas.width  = size.w;
+        canvas.height = size.h;
+        if (visualizer) visualizer.setRendererSize(size.w, size.h);
+        recRenderSize = size;
+      }
+
       var videoStream = canvas.captureStream(fps);
       recStream = new MediaStream();
       videoStream.getVideoTracks().forEach(function (t) { recStream.addTrack(t); });
@@ -650,6 +763,11 @@
         }, 1500);
         recChunks = [];
         recStream = null;
+        // Restore canvas to window dimensions if we changed it.
+        if (recRenderSize) {
+          recRenderSize = null;
+          sizeCanvas();
+        }
         showToast('Saved ' + a.download + ' (' + (blob.size / (1024*1024)).toFixed(1) + ' MB)', 3500);
       };
       recorder.start(1000); // 1s chunks -> robust against tab freezes
@@ -731,28 +849,28 @@
     start(URL.createObjectURL(f), f.name);
   });
 
-  sampleLnk.addEventListener('click', function () {
-    start('song.ogg', 'song.ogg (bundled sample)');
+
+  sampleLnk.addEventListener("click", function () {
+    start("song.ogg", "song.ogg (bundled sample)");
   });
 
   // Drag-and-drop anywhere.
-  window.addEventListener('dragover', function (e) {
+  window.addEventListener("dragover", function (e) {
     e.preventDefault();
-    if (!started) picker.classList.add('dragover');
+    if (!started) picker.classList.add("dragover");
   });
-  window.addEventListener('dragleave', function () {
-    picker.classList.remove('dragover');
+  window.addEventListener("dragleave", function () {
+    picker.classList.remove("dragover");
   });
-  window.addEventListener('drop', function (e) {
+  window.addEventListener("drop", function (e) {
     e.preventDefault();
-    picker.classList.remove('dragover');
+    picker.classList.remove("dragover");
     var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
     if (!f) return;
-    // If already playing, swap the source.
     if (started) {
       audioEl.src = URL.createObjectURL(f);
       audioEl.play();
-      npEl.textContent = 'Now playing: ' + f.name;
+      npEl.textContent = "Now playing: " + f.name;
       wakeHud();
     } else {
       start(URL.createObjectURL(f), f.name);
@@ -760,43 +878,63 @@
   });
 
   // Keyboard shortcuts.
-  window.addEventListener('keydown', function (e) {
+  window.addEventListener("keydown", function (e) {
     if (!started) return;
+    var tn = e.target && e.target.tagName;
+    if (tn === "INPUT" || tn === "SELECT" || tn === "TEXTAREA") return;
     switch (e.key) {
-      case 'ArrowRight':
-      case 'n': case 'N':
+      case "ArrowRight":
+      case "n": case "N":
         advance(+1); wakeHud(); break;
-      case 'ArrowLeft':
-      case 'p': case 'P':
+      case "ArrowLeft":
+      case "p": case "P":
         advance(-1); wakeHud(); break;
-      case 'r': case 'R':
+      case "r": case "R":
         pickRandom(); resetAuto(); wakeHud(); break;
-      case ' ':
+      case " ":
         e.preventDefault();
         setAuto(!autoCycle); wakeHud(); break;
-      case 'f': case 'F':
+      case "f": case "F":
         toggleFullscreen(); break;
-      case 'h': case 'H':
-        hud.classList.toggle('show');
-        hud.classList.toggle('idle');
+      case "h": case "H":
+        hud.classList.toggle("show");
+        hud.classList.toggle("idle");
         break;
-      case 'v': case 'V':
+      case "v": case "V":
         toggleRecording(); wakeHud(); break;
-      case 'k': case 'K':
+      case "k": case "K":
         togglePlayPause(); wakeHud(); break;
-      case 's': case 'S':
+      case "s": case "S":
         stopPlayback(); wakeHud(); break;
     }
   });
 
-  btnPrev.addEventListener('click', function () { advance(-1); wakeHud(); });
-  btnNext.addEventListener('click', function () { advance(+1); wakeHud(); });
-  btnRandom.addEventListener('click', function () { pickRandom(); resetAuto(); wakeHud(); });
-  btnAuto.addEventListener('click', function () { setAuto(!autoCycle); wakeHud(); });
-  btnRec.addEventListener('click', function () { toggleRecording(); wakeHud(); });
-  btnRecStart.addEventListener('click', startRecording);
-  btnRecCancel.addEventListener('click', hideRecPanel);
-  btnFullscreen.addEventListener('click', toggleFullscreen);
+  // Preset jump-by-number input
+  presetIdxInput.addEventListener("change", jumpToPresetFromInput);
+  presetIdxInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") {
+      jumpToPresetFromInput();
+      presetIdxInput.blur();
+    } else if (e.key === "Escape") {
+      presetIdxInput.value = presetIdx + 1;
+      presetIdxInput.blur();
+    }
+  });
+  presetIdxInput.addEventListener("focus", function () { presetIdxInput.select(); });
+
+  btnPrev.addEventListener("click", function () { advance(-1); wakeHud(); });
+  btnNext.addEventListener("click", function () { advance(+1); wakeHud(); });
+  btnRandom.addEventListener("click", function () { pickRandom(); resetAuto(); wakeHud(); });
+  btnAuto.addEventListener("click", function () { setAuto(!autoCycle); wakeHud(); });
+  btnRec.addEventListener("click", function () { toggleRecording(); wakeHud(); });
+  btnRecStart.addEventListener("click", startRecording);
+  btnRecCancel.addEventListener("click", hideRecPanel);
+  btnFullscreen.addEventListener("click", toggleFullscreen);
+
+  // Auto-suggest video bitrate when fps or resolution changes.
+  recFpsSelect.addEventListener("change", applyRecommendedBitrate);
+  recResSelect.addEventListener("change", applyRecommendedBitrate);
+  applyRecommendedBitrate(); // seed initial value
 
   // Transport buttons
   btnPlay.addEventListener('click', function () { togglePlayPause(); wakeHud(); });
