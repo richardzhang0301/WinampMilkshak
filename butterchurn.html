@@ -83,7 +83,7 @@
   #hud.idle #preset-name,
   #hud.idle #controls { opacity: 0; }
 
-  #nowplaying { bottom: 12px; left: 12px; }
+  #nowplaying { bottom: 60px; left: 12px; }
   #preset-name { top: 12px; left: 12px; max-width: 60vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #controls { top: 12px; right: 12px; display: flex; gap: 6px; align-items: center; }
   #controls button {
@@ -193,6 +193,73 @@
     animation: blink 1.2s linear infinite;
   }
   @keyframes blink { 0%,49%{opacity:1} 50%,100%{opacity:0.2} }
+
+  /* Transport bar (play / stop / seek) */
+  #transport {
+    position: absolute;
+    bottom: 12px; left: 50%;
+    transform: translateX(-50%);
+    width: min(640px, 92vw);
+    box-sizing: border-box;
+    padding: 8px 14px;
+    background: rgba(0,0,0,0.55);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: #ddd;
+    pointer-events: auto;
+    backdrop-filter: blur(4px);
+    opacity: 0;
+    transition: opacity 200ms ease;
+  }
+  #hud.show #transport { opacity: 1; }
+  #hud.idle #transport { opacity: 0; }
+  #transport button {
+    background: rgba(255,255,255,0.08);
+    color: #ddd;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 3px;
+    padding: 4px 10px;
+    cursor: pointer;
+    font: inherit; font-size: 14px; line-height: 1;
+    min-width: 34px;
+  }
+  #transport button:hover { background: rgba(255,255,255,0.18); }
+  #transport input[type=range] {
+    flex: 1;
+    margin: 0;
+    height: 4px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: rgba(255,255,255,0.18);
+    border-radius: 2px;
+    cursor: pointer;
+    outline: none;
+  }
+  #transport input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    cursor: pointer;
+    border: none;
+  }
+  #transport input[type=range]::-moz-range-thumb {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    cursor: pointer;
+    border: none;
+  }
+  #transport .time {
+    font-variant-numeric: tabular-nums;
+    color: #bbb;
+    min-width: 92px;
+    text-align: right;
+    white-space: nowrap;
+  }
 </style>
 </head>
 <body>
@@ -235,6 +302,13 @@
     <button id="btnAuto" title="Toggle auto-cycle (Space)">auto</button>
     <button id="btnRec" title="Record video (V)">rec</button>
     <button id="btnFullscreen" title="Fullscreen (F)">full</button>
+  </div>
+
+  <div id="transport">
+    <button id="btnPlay" title="Play / Pause (K)">&#9654;</button>
+    <button id="btnStop" title="Stop">&#9632;</button>
+    <input id="seek" type="range" min="0" max="0" step="0.1" value="0">
+    <span class="time" id="timeLabel">0:00 / 0:00</span>
   </div>
 </div>
 
@@ -299,6 +373,12 @@
   var btnRecStart   = document.getElementById('btnRecStart');
   var btnRecCancel  = document.getElementById('btnRecCancel');
 
+  // Transport
+  var btnPlay   = document.getElementById('btnPlay');
+  var btnStop   = document.getElementById('btnStop');
+  var seekEl    = document.getElementById('seek');
+  var timeLabel = document.getElementById('timeLabel');
+
   // ---- State ----
   var visualizer = null;
   var audioCtx   = null;
@@ -320,6 +400,9 @@
   var recMimeType   = '';
   var recStartTime  = 0;
   var recIndTimer   = null;
+
+  // Transport state
+  var userSeeking   = false;
 
   // ---- Butterchurn sanity ----
   if (typeof butterchurn === 'undefined' || typeof butterchurnPresets === 'undefined') {
@@ -603,6 +686,44 @@
     }
   }
 
+  // ---- Transport ----
+  function fmtTime(s) {
+    if (!isFinite(s) || s < 0) s = 0;
+    s = Math.floor(s);
+    var mm = Math.floor(s / 60);
+    var ss = s % 60;
+    return mm + ':' + (ss < 10 ? '0' : '') + ss;
+  }
+
+  function updateTimeUI() {
+    timeLabel.textContent = fmtTime(audioEl.currentTime) + ' / ' + fmtTime(audioEl.duration);
+  }
+
+  function refreshSeekMax() {
+    if (isFinite(audioEl.duration) && audioEl.duration > 0) {
+      seekEl.max = audioEl.duration;
+    }
+  }
+
+  function togglePlayPause() {
+    if (!started) return;
+    if (audioEl.paused) {
+      audioEl.play().catch(function (err) {
+        console.warn('[audio] play failed:', err && err.message);
+      });
+    } else {
+      audioEl.pause();
+    }
+  }
+
+  function stopPlayback() {
+    if (!started) return;
+    audioEl.pause();
+    try { audioEl.currentTime = 0; } catch (e) {}
+    updateTimeUI();
+    if (!userSeeking) seekEl.value = 0;
+  }
+
   // ---- Event wiring ----
   fileInput.addEventListener('change', function (e) {
     var f = e.target.files && e.target.files[0];
@@ -661,6 +782,10 @@
         break;
       case 'v': case 'V':
         toggleRecording(); wakeHud(); break;
+      case 'k': case 'K':
+        togglePlayPause(); wakeHud(); break;
+      case 's': case 'S':
+        stopPlayback(); wakeHud(); break;
     }
   });
 
@@ -672,6 +797,34 @@
   btnRecStart.addEventListener('click', startRecording);
   btnRecCancel.addEventListener('click', hideRecPanel);
   btnFullscreen.addEventListener('click', toggleFullscreen);
+
+  // Transport buttons
+  btnPlay.addEventListener('click', function () { togglePlayPause(); wakeHud(); });
+  btnStop.addEventListener('click', function () { stopPlayback();    wakeHud(); });
+
+  // Seek slider
+  seekEl.addEventListener('input', function () {
+    userSeeking = true;
+    if (!started) return;
+    try { audioEl.currentTime = parseFloat(seekEl.value) || 0; } catch (e) {}
+    updateTimeUI();
+  });
+  seekEl.addEventListener('change',     function () { userSeeking = false; });
+  seekEl.addEventListener('mousedown',  function () { userSeeking = true;  });
+  seekEl.addEventListener('mouseup',    function () { userSeeking = false; });
+  seekEl.addEventListener('touchstart', function () { userSeeking = true;  });
+  seekEl.addEventListener('touchend',   function () { userSeeking = false; });
+
+  // Audio element -> transport UI
+  audioEl.addEventListener('loadedmetadata', function () { refreshSeekMax(); updateTimeUI(); });
+  audioEl.addEventListener('durationchange', function () { refreshSeekMax(); updateTimeUI(); });
+  audioEl.addEventListener('timeupdate',     function () {
+    if (!userSeeking) seekEl.value = audioEl.currentTime;
+    updateTimeUI();
+  });
+  audioEl.addEventListener('play',  function () { btnPlay.textContent = '⏸'; });
+  audioEl.addEventListener('pause', function () { btnPlay.textContent = '▶'; });
+  audioEl.addEventListener('ended', function () { btnPlay.textContent = '▶'; });
 
   // Keep HUD visible on mouse activity, then idle out.
   window.addEventListener('mousemove', wakeHud);
